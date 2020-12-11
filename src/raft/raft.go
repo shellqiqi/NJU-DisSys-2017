@@ -23,6 +23,7 @@ import (
 	"math/rand"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 import "labrpc"
@@ -372,4 +373,59 @@ func (rf *Raft) electionTimeout() time.Duration {
 	} else {
 		return time.Duration(150+rand.Intn(150)) * time.Millisecond
 	}
+}
+
+// startElection starts a new election with this CM as a candidate.
+// Expects cm.mu to be locked.
+func (rf *Raft) startElection() {
+	rf.state = Candidate
+	rf.currentTerm += 1
+	savedCurrentTerm := rf.currentTerm
+	rf.electionResetEvent = time.Now()
+	rf.votedFor = rf.me
+	rf.dlog("becomes Candidate (currentTerm=%d); log=%v", savedCurrentTerm, rf.log)
+
+	var votesReceived int32 = 1
+
+	// Send RequestVote RPCs to all other servers concurrently.
+	for peerId := range rf.peers {
+		go func(peerId int) {
+			args := RequestVoteArgs{
+				Term:        savedCurrentTerm,
+				CandidateId: rf.me,
+			}
+			var reply RequestVoteReply
+
+			rf.dlog("sending RequestVote to %d: %+v", peerId, args)
+			if rf.peers[peerId].Call("ConsensusModule.RequestVote", args, &reply) {
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+				rf.dlog("received RequestVoteReply %+v", reply)
+
+				if rf.state != Candidate {
+					rf.dlog("while waiting for reply, state = %v", rf.state)
+					return
+				}
+
+				if reply.Term > savedCurrentTerm {
+					rf.dlog("term out of date in RequestVoteReply")
+					// TODO: rf.becomeFollower(reply.Term)
+					return
+				} else if reply.Term == savedCurrentTerm {
+					if reply.VoteGranted {
+						votes := int(atomic.AddInt32(&votesReceived, 1))
+						if votes*2 > len(rf.peers)+1 {
+							// Won the election!
+							rf.dlog("wins election with %d votes", votes)
+							// TODO: rf.startLeader()
+							return
+						}
+					}
+				}
+			}
+		}(peerId)
+	}
+
+	// Run another election timer, in case this election is not successful.
+	go rf.runElectionTimer()
 }
