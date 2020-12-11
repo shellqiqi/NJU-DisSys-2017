@@ -20,6 +20,8 @@ package raft
 import (
 	"fmt"
 	"log"
+	"math/rand"
+	"os"
 	"sync"
 	"time"
 )
@@ -303,11 +305,71 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		rf.mu.Lock()
 		rf.electionResetEvent = time.Now()
 		rf.mu.Unlock()
-		// TODO: rf.runElectionTimer()
+		rf.runElectionTimer()
 	}()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	return rf
+}
+
+// runElectionTimer implements an election timer. It should be launched whenever
+// we want to start a timer towards becoming a candidate in a new election.
+//
+// This function is blocking and should be launched in a separate goroutine;
+// it's designed to work for a single (one-shot) election timer, as it exits
+// whenever the CM state changes from follower/candidate or the term changes.
+func (rf *Raft) runElectionTimer() {
+	timeoutDuration := rf.electionTimeout()
+	rf.mu.Lock()
+	termStarted := rf.currentTerm
+	rf.mu.Unlock()
+	rf.dlog("election timer started (%v), term=%d", timeoutDuration, termStarted)
+
+	// This loops until either:
+	// - we discover the election timer is no longer needed, or
+	// - the election timer expires and this CM becomes a candidate
+	// In a follower, this typically keeps running in the background for the
+	// duration of the CM's lifetime.
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		<-ticker.C
+
+		rf.mu.Lock()
+		if rf.state != Candidate && rf.state != Follower {
+			rf.dlog("in election timer state=%s, bailing out", rf.state)
+			rf.mu.Unlock()
+			return
+		}
+
+		if termStarted != rf.currentTerm {
+			rf.dlog("in election timer term changed from %d to %d, bailing out",
+				termStarted, rf.currentTerm)
+			rf.mu.Unlock()
+			return
+		}
+
+		// Start an election if we haven't heard from a leader or haven't voted for
+		// someone for the duration of the timeout.
+		if elapsed := time.Since(rf.electionResetEvent); elapsed >= timeoutDuration {
+			// TODO: rf.startElection()
+			rf.mu.Unlock()
+			return
+		}
+		rf.mu.Unlock()
+	}
+}
+
+// electionTimeout generates a pseudo-random election timeout duration.
+func (rf *Raft) electionTimeout() time.Duration {
+	// If RAFT_FORCE_MORE_REELECTION is set, stress-test by deliberately
+	// generating a hard-coded number very often. This will create collisions
+	// between different servers and force more re-elections.
+	if len(os.Getenv("RAFT_FORCE_MORE_REELECTION")) > 0 && rand.Intn(3) == 0 {
+		return time.Duration(150) * time.Millisecond
+	} else {
+		return time.Duration(150+rand.Intn(150)) * time.Millisecond
+	}
 }
