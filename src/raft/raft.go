@@ -413,7 +413,7 @@ func (rf *Raft) startElection() {
 				} else if reply.Term == savedCurrentTerm {
 					if reply.VoteGranted {
 						votes := int(atomic.AddInt32(&votesReceived, 1))
-						if votes*2 > len(rf.peers)+1 {
+						if votes*2 > len(rf.peers) {
 							// Won the election!
 							rf.dlog("wins election with %d votes", votes)
 							rf.startLeader()
