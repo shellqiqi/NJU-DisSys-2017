@@ -128,21 +128,44 @@ func (rf *Raft) readPersist(data []byte) {
 // example RequestVote RPC arguments structure.
 //
 type RequestVoteArgs struct {
-	// Your data here.
+	Term         int
+	CandidateId  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 //
 // example RequestVote RPC reply structure.
 //
 type RequestVoteReply struct {
-	// Your data here.
+	Term        int
+	VoteGranted bool
 }
 
 //
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here.
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if rf.state == Dead {
+		return
+	}
+
+	if args.Term > rf.currentTerm {
+		// TODO: rf.becomeFollower(args.Term)
+	}
+
+	if rf.currentTerm == args.Term &&
+		(rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
+		reply.VoteGranted = true
+		rf.votedFor = args.CandidateId
+		rf.electionResetEvent = time.Now()
+	} else {
+		reply.VoteGranted = false
+	}
+	reply.Term = rf.currentTerm
 }
 
 //
