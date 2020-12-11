@@ -205,6 +205,48 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 	return ok
 }
 
+type AppendEntriesArgs struct {
+	Term     int
+	LeaderId int
+
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []LogEntry
+	LeaderCommit int
+}
+
+type AppendEntriesReply struct {
+	Term    int
+	Success bool
+}
+
+func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) error {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.state == Dead {
+		return nil
+	}
+	rf.dlog("AppendEntries: %+v", args)
+
+	if args.Term > rf.currentTerm {
+		rf.dlog("... term out of date in AppendEntries")
+		// TODO: rf.becomeFollower(args.Term)
+	}
+
+	reply.Success = false
+	if args.Term == rf.currentTerm {
+		if rf.state != Follower {
+			// TODO: rf.becomeFollower(args.Term)
+		}
+		rf.electionResetEvent = time.Now()
+		reply.Success = true
+	}
+
+	reply.Term = rf.currentTerm
+	rf.dlog("AppendEntries reply: %+v", *reply)
+	return nil
+}
+
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
