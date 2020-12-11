@@ -17,11 +17,19 @@ package raft
 //   in the same server.
 //
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 import "labrpc"
 
 // import "bytes"
 // import "encoding/gob"
+
+type LogEntry struct {
+	Command interface{}
+	Term    int
+}
 
 type CMState int
 
@@ -68,10 +76,14 @@ type Raft struct {
 	persister *Persister
 	me        int // index into peers[]
 
-	// Your data here.
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
+	// Persistent Raft state on all servers
+	currentTerm int
+	votedFor    int
+	log         []LogEntry
 
+	// Volatile Raft state on all servers
+	state              CMState
+	electionResetEvent time.Time
 }
 
 // return currentTerm and whether this server
@@ -204,7 +216,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 
-	// Your initialization code here.
+	rf.state = Follower
+	rf.votedFor = -1
+
+	go func() {
+		rf.mu.Lock()
+		rf.electionResetEvent = time.Now()
+		rf.mu.Unlock()
+		// TODO: rf.runElectionTimer()
+	}()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
