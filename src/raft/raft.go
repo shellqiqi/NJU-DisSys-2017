@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -25,6 +27,15 @@ import "labrpc"
 
 // import "bytes"
 // import "encoding/gob"
+
+const DebugCM = 1
+
+func (rf *Raft) dlog(format string, args ...interface{}) {
+	if DebugCM > 0 {
+		format = fmt.Sprintf("[%d] ", rf.me) + format
+		log.Printf(format, args...)
+	}
+}
 
 type LogEntry struct {
 	Command interface{}
