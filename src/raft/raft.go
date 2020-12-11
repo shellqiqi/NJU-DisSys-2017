@@ -156,15 +156,17 @@ type RequestVoteReply struct {
 //
 // example RequestVote RPC handler.
 //
-func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
+func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) error {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
 	if rf.state == Dead {
-		return
+		return nil
 	}
+	rf.dlog("RequestVote: %+v [currentTerm=%d, votedFor=%d]",
+		args, rf.currentTerm, rf.votedFor)
 
 	if args.Term > rf.currentTerm {
+		rf.dlog("... term out of date in RequestVote")
 		// TODO: rf.becomeFollower(args.Term)
 	}
 
@@ -177,6 +179,8 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = false
 	}
 	reply.Term = rf.currentTerm
+	rf.dlog("... RequestVote reply: %+v", reply)
+	return nil
 }
 
 //
