@@ -90,14 +90,29 @@ type Raft struct {
 	persister *Persister
 	me        int // index into peers[]
 
+	// commitChan is the channel where this CM is going to report committed log
+	// entries. It's passed in by the client during construction.
+	commitChan chan<- ApplyMsg
+
+	// newCommitReadyChan is an internal notification channel used by goroutines
+	// that commit new entries to the log to notify that these entries may be sent
+	// on commitChan.
+	newCommitReadyChan chan struct{}
+
 	// Persistent Raft state on all servers
 	currentTerm int
 	votedFor    int
 	log         []LogEntry
 
 	// Volatile Raft state on all servers
+	commitIndex        int
+	lastApplied        int
 	state              CMState
 	electionResetEvent time.Time
+
+	// Volatile Raft state on leaders
+	nextIndex  map[int]int
+	matchIndex map[int]int
 }
 
 // return currentTerm and whether this server
@@ -298,12 +313,23 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.state = Follower
 	rf.votedFor = -1
 
+	rf.commitChan = applyCh
+	rf.newCommitReadyChan = make(chan struct{}, 16)
+
+	rf.commitIndex = -1
+	rf.lastApplied = -1
+
+	rf.nextIndex = make(map[int]int)
+	rf.matchIndex = make(map[int]int)
+
 	go func() {
 		rf.mu.Lock()
 		rf.electionResetEvent = time.Now()
 		rf.mu.Unlock()
 		rf.runElectionTimer()
 	}()
+
+	// TODO: go rf.commitChanSender()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
