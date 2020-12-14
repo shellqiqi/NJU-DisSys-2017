@@ -275,11 +275,16 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
-	return index, term, isLeader
+	rf.dlog("Submit received by %v: %v", rf.state, command)
+	if rf.state == Leader {
+		rf.log = append(rf.log, LogEntry{Command: command, Term: rf.currentTerm})
+		rf.dlog("... log=%v", rf.log)
+	}
+
+	return len(rf.log) - 1, rf.currentTerm, rf.state == Leader
 }
 
 //
