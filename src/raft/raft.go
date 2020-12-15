@@ -334,7 +334,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		rf.runElectionTimer()
 	}()
 
-	// TODO: go rf.commitChanSender()
+	go rf.commitChanSender()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -496,12 +496,26 @@ func (rf *Raft) leaderSendHeartbeats() {
 		if peerId == rf.me {
 			continue
 		}
-		args := AppendEntriesArgs{
-			Term:     savedCurrentTerm,
-			LeaderId: rf.me,
-		}
 		go func(peerId int) {
-			rf.dlog("sending AppendEntries to %v: ni=%d, args=%+v", peerId, 0, args)
+			rf.mu.Lock()
+			ni := rf.nextIndex[peerId]
+			prevLogIndex := ni - 1
+			prevLogTerm := -1
+			if prevLogIndex >= 0 {
+				prevLogTerm = rf.log[prevLogIndex].Term
+			}
+			entries := rf.log[ni:]
+			args := AppendEntriesArgs{
+				Term:         savedCurrentTerm,
+				LeaderId:     rf.me,
+				PrevLogIndex: prevLogIndex,
+				PrevLogTerm:  prevLogTerm,
+				Entries:      entries,
+				LeaderCommit: rf.commitIndex,
+			}
+			rf.mu.Unlock()
+
+			rf.dlog("sending AppendEntries to %v: ni=%d, args=%+v", peerId, ni, args)
 			var reply AppendEntriesReply
 			if rf.peers[peerId].Call("Raft.AppendEntries", args, &reply) {
 				rf.mu.Lock()
@@ -510,6 +524,37 @@ func (rf *Raft) leaderSendHeartbeats() {
 					rf.dlog("term out of date in heartbeat reply")
 					rf.becomeFollower(reply.Term)
 					return
+				}
+
+				if rf.state == Leader && savedCurrentTerm == reply.Term {
+					if reply.Success {
+						rf.nextIndex[peerId] = ni + len(entries)
+						rf.matchIndex[peerId] = rf.nextIndex[peerId] - 1
+						rf.dlog("AppendEntries reply from %d success: nextIndex := %v, matchIndex := %v",
+							peerId, rf.nextIndex, rf.matchIndex)
+
+						savedCommitIndex := rf.commitIndex
+						for i := rf.commitIndex + 1; i < len(rf.log); i++ {
+							if rf.log[i].Term == rf.currentTerm {
+								matchCount := 1
+								for peerId := range rf.peers {
+									if peerId != rf.me && rf.matchIndex[peerId] >= i {
+										matchCount++
+									}
+								}
+								if matchCount*2 > len(rf.peers) {
+									rf.commitIndex = i
+								}
+							}
+						}
+						if rf.commitIndex != savedCommitIndex {
+							rf.dlog("leader sets commitIndex := %d", rf.commitIndex)
+							rf.newCommitReadyChan <- struct{}{}
+						}
+					} else {
+						rf.nextIndex[peerId] = ni - 1
+						rf.dlog("AppendEntries reply from %d !success: nextIndex := %d", peerId, ni-1)
+					}
 				}
 			}
 		}(peerId)
@@ -526,4 +571,33 @@ func (rf *Raft) becomeFollower(term int) {
 	rf.electionResetEvent = time.Now()
 
 	go rf.runElectionTimer()
+}
+
+// commitChanSender is responsible for sending committed entries on
+// cm.commitChan. It watches newCommitReadyChan for notifications and calculates
+// which new entries are ready to be sent. This method should run in a separate
+// background goroutine; cm.commitChan may be buffered and will limit how fast
+// the client consumes new committed entries. Returns when newCommitReadyChan is
+// closed.
+func (rf *Raft) commitChanSender() {
+	for range rf.newCommitReadyChan {
+		// Find which entries we have to apply.
+		rf.mu.Lock()
+		savedLastApplied := rf.lastApplied
+		var entries []LogEntry
+		if rf.commitIndex > rf.lastApplied {
+			entries = rf.log[rf.lastApplied+1 : rf.commitIndex+1]
+			rf.lastApplied = rf.commitIndex
+		}
+		rf.mu.Unlock()
+		rf.dlog("commitChanSender entries=%v, savedLastApplied=%d", entries, savedLastApplied)
+
+		for i, entry := range entries {
+			rf.commitChan <- ApplyMsg{
+				Command: entry.Command,
+				Index:   savedLastApplied + i + 1,
+			}
+		}
+	}
+	rf.dlog("commitChanSender done")
 }
