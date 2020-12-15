@@ -253,7 +253,51 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 			rf.becomeFollower(args.Term)
 		}
 		rf.electionResetEvent = time.Now()
-		reply.Success = true
+
+		// Does our log contain an entry at PrevLogIndex whose term matches
+		// PrevLogTerm? Note that in the extreme case of PrevLogIndex=-1 this is
+		// vacuously true.
+		if args.PrevLogIndex == -1 ||
+			(args.PrevLogIndex < len(rf.log) &&
+				args.PrevLogTerm == rf.log[args.PrevLogIndex].Term) {
+			reply.Success = true
+
+			// Find an insertion point - where there's a term mismatch between
+			// the existing log starting at PrevLogIndex+1 and the new entries sent
+			// in the RPC.
+			logInsertIndex := args.PrevLogIndex + 1
+			newEntriesIndex := 0
+
+			for {
+				if logInsertIndex >= len(rf.log) ||
+					newEntriesIndex >= len(args.Entries) {
+					break
+				}
+				if rf.log[logInsertIndex].Term != args.Entries[newEntriesIndex].Term {
+					break
+				}
+				logInsertIndex++
+				newEntriesIndex++
+			}
+			// At the end of this loop:
+			// - logInsertIndex points at the end of the log, or an index where the
+			//   term mismatches with an entry from the leader
+			// - newEntriesIndex points at the end of Entries, or an index where the
+			//   term mismatches with the corresponding log entry
+			if newEntriesIndex < len(args.Entries) {
+				rf.dlog("... inserting entries %v from index %d",
+					args.Entries[newEntriesIndex:], logInsertIndex)
+				rf.log = append(rf.log[:logInsertIndex], args.Entries[newEntriesIndex:]...)
+				rf.dlog("... log is now: %v", rf.log)
+			}
+
+			// Set commit index.
+			if args.LeaderCommit > rf.commitIndex {
+				rf.commitIndex = intMin(args.LeaderCommit, len(rf.log)-1)
+				rf.dlog("... setting commitIndex=%d", rf.commitIndex)
+				rf.newCommitReadyChan <- struct{}{}
+			}
+		}
 	}
 
 	reply.Term = rf.currentTerm
@@ -600,4 +644,11 @@ func (rf *Raft) commitChanSender() {
 		}
 	}
 	rf.dlog("commitChanSender done")
+}
+
+func intMin(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
