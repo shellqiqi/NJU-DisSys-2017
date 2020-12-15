@@ -341,7 +341,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // turn off debug output from this instance.
 //
 func (rf *Raft) Kill() {
-	// Your code here, if desired.
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.state = Dead
+	rf.dlog("becomes Dead")
+	close(rf.newCommitReadyChan)
 }
 
 //
