@@ -184,8 +184,11 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		rf.becomeFollower(args.Term)
 	}
 
+	lastLogIndex, lastLogTerm := rf.lastLogIndexAndTerm()
 	if rf.currentTerm == args.Term &&
-		(rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
+		(rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
+		(args.LastLogTerm > lastLogTerm ||
+			(args.LastLogTerm == lastLogTerm && args.LastLogIndex >= lastLogIndex)) {
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
 		rf.electionResetEvent = time.Now()
@@ -464,9 +467,15 @@ func (rf *Raft) startElection() {
 			continue
 		}
 		go func(peerId int) {
+			rf.mu.Lock()
+			savedLastLogIndex, savedLastLogTerm := rf.lastLogIndexAndTerm()
+			rf.mu.Unlock()
+
 			args := RequestVoteArgs{
-				Term:        savedCurrentTerm,
-				CandidateId: rf.me,
+				Term:         savedCurrentTerm,
+				CandidateId:  rf.me,
+				LastLogIndex: savedLastLogIndex,
+				LastLogTerm:  savedLastLogTerm,
 			}
 			var reply RequestVoteReply
 
@@ -618,9 +627,9 @@ func (rf *Raft) becomeFollower(term int) {
 }
 
 // commitChanSender is responsible for sending committed entries on
-// cm.commitChan. It watches newCommitReadyChan for notifications and calculates
+// rf.commitChan. It watches newCommitReadyChan for notifications and calculates
 // which new entries are ready to be sent. This method should run in a separate
-// background goroutine; cm.commitChan may be buffered and will limit how fast
+// background goroutine; rf.commitChan may be buffered and will limit how fast
 // the client consumes new committed entries. Returns when newCommitReadyChan is
 // closed.
 func (rf *Raft) commitChanSender() {
@@ -644,6 +653,18 @@ func (rf *Raft) commitChanSender() {
 		}
 	}
 	rf.dlog("commitChanSender done")
+}
+
+// lastLogIndexAndTerm returns the last log index and the last log entry's term
+// (or -1 if there's no log) for this server.
+// Expects rf.mu to be locked.
+func (rf *Raft) lastLogIndexAndTerm() (int, int) {
+	if len(rf.log) > 0 {
+		lastIndex := len(rf.log) - 1
+		return lastIndex, rf.log[lastIndex].Term
+	} else {
+		return -1, -1
+	}
 }
 
 func intMin(a, b int) int {
