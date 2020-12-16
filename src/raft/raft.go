@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"log"
 	"math/rand"
@@ -126,26 +128,36 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
-	// Your code here.
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := gob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := gob.NewEncoder(w)
+	if err := e.Encode(rf.currentTerm); err != nil {
+		log.Fatal(err)
+	}
+	if err := e.Encode(rf.votedFor); err != nil {
+		log.Fatal(err)
+	}
+	if err := e.Encode(rf.log); err != nil {
+		log.Fatal(err)
+	}
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
-	// Your code here.
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := gob.NewDecoder(r)
-	// d.Decode(&rf.xxx)
-	// d.Decode(&rf.yyy)
+	r := bytes.NewBuffer(data)
+	d := gob.NewDecoder(r)
+	if err := d.Decode(&rf.currentTerm); err != nil {
+		log.Fatal(err)
+	}
+	if err := d.Decode(&rf.votedFor); err != nil {
+		log.Fatal(err)
+	}
+	if err := d.Decode(&rf.log); err != nil {
+		log.Fatal(err)
+	}
 }
 
 //
@@ -195,6 +207,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = false
 	}
 	reply.Term = rf.currentTerm
+	rf.persist()
 	rf.dlog("... RequestVote reply: %+v", reply)
 	return
 }
@@ -303,6 +316,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	}
 
 	reply.Term = rf.currentTerm
+	rf.persist()
 	rf.dlog("AppendEntries reply: %+v", *reply)
 	return
 }
@@ -327,6 +341,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.dlog("Submit received by %v: %v", rf.state, command)
 	if rf.state == Leader {
 		rf.log = append(rf.log, LogEntry{Command: command, Term: rf.currentTerm})
+		rf.persist()
 		rf.dlog("... log=%v", rf.log)
 	}
 
@@ -378,6 +393,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make(map[int]int)
 	rf.matchIndex = make(map[int]int)
 
+	// initialize from state persisted before a crash
+	if persister.RaftStateSize() > 0 {
+		rf.readPersist(persister.ReadRaftState())
+	}
+
 	go func() {
 		rf.mu.Lock()
 		rf.electionResetEvent = time.Now()
@@ -386,9 +406,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	}()
 
 	go rf.commitChanSender()
-
-	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
 
 	return rf
 }
