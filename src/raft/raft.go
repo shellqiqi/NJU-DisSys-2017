@@ -31,10 +31,8 @@ import "labrpc"
 // import "bytes"
 // import "encoding/gob"
 
-const DebugCM = 1
-
 func (rf *Raft) dlog(format string, args ...interface{}) {
-	if DebugCM > 0 {
+	if rf.debug {
 		format = fmt.Sprintf("[%d] ", rf.me) + format
 		log.Printf(format, args...)
 	}
@@ -85,6 +83,7 @@ type ApplyMsg struct {
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
+	debug     bool
 	mu        sync.Mutex
 	peers     []*labrpc.ClientEnd
 	persister *Persister
@@ -362,6 +361,7 @@ func (rf *Raft) Kill() {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
+	_, rf.debug = os.LookupEnv("DEBUG")
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
@@ -521,7 +521,14 @@ func (rf *Raft) startElection() {
 // Expects rf.mu to be locked.
 func (rf *Raft) startLeader() {
 	rf.state = Leader
-	rf.dlog("becomes Leader; term=%d, log=%v", rf.currentTerm, rf.log)
+	for peerId := range rf.peers {
+		if peerId != rf.me {
+			rf.nextIndex[peerId] = len(rf.log)
+			rf.matchIndex[peerId] = -1
+		}
+	}
+	rf.dlog("becomes Leader; term=%d, nextIndex=%v, matchIndex=%v; log=%v",
+		rf.currentTerm, rf.nextIndex, rf.matchIndex, rf.log)
 
 	go func() {
 		ticker := time.NewTicker(50 * time.Millisecond)

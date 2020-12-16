@@ -142,20 +142,25 @@ func TestFailNoAgree(t *testing.T) {
 
 	fmt.Printf("Test: no agreement if too many followers fail ...\n")
 
+	fmt.Printf("Test: Submit 10\n")
 	cfg.one(10, servers)
 
 	// 3 of 5 followers disconnect
+	fmt.Printf("Test: CheckOneLeader\n")
 	leader := cfg.checkOneLeader()
+	fmt.Printf("Test: Disconnect [%d][%d][%d]\n",
+		(leader+1)%servers, (leader+2)%servers, (leader+3)%servers)
 	cfg.disconnect((leader + 1) % servers)
 	cfg.disconnect((leader + 2) % servers)
 	cfg.disconnect((leader + 3) % servers)
 
+	fmt.Printf("Test: Submit 20 to [%d]\n", leader)
 	index, _, ok := cfg.rafts[leader].Start(20)
 	if ok != true {
 		t.Fatalf("leader rejected Start()")
 	}
-	if index != 2 {
-		t.Fatalf("expected index 2, got %v", index)
+	if index != 1 {
+		t.Fatalf("expected index 1, got %v", index)
 	}
 
 	time.Sleep(2 * RaftElectionTimeout)
@@ -166,6 +171,8 @@ func TestFailNoAgree(t *testing.T) {
 	}
 
 	// repair failures
+	fmt.Printf("Test: Connect [%d][%d][%d]\n",
+		(leader+1)%servers, (leader+2)%servers, (leader+3)%servers)
 	cfg.connect((leader + 1) % servers)
 	cfg.connect((leader + 2) % servers)
 	cfg.connect((leader + 3) % servers)
@@ -173,12 +180,14 @@ func TestFailNoAgree(t *testing.T) {
 	// the disconnected majority may have chosen a leader from
 	// among their own ranks, forgetting index 2.
 	// or perhaps
+	fmt.Printf("Test: CheckOneLeader\n")
 	leader2 := cfg.checkOneLeader()
+	fmt.Printf("Test: Submit 30 to [%d]\n", leader2)
 	index2, _, ok2 := cfg.rafts[leader2].Start(30)
 	if ok2 == false {
 		t.Fatalf("leader2 rejected Start()")
 	}
-	if index2 < 2 || index2 > 3 {
+	if index2 < 1 || index2 > 2 {
 		t.Fatalf("unexpected index %v", index2)
 	}
 
